@@ -1,0 +1,233 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>방구차 Arcade</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;background:#10131b;color:#fff;font-family:monospace;overflow:hidden;touch-action:none}
+body{display:flex;align-items:center;justify-content:center}
+#game{width:min(100vw,900px);padding:10px}
+header{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:8px;font-size:clamp(12px,2.5vw,18px);color:#f8d85b}
+h1{font-size:clamp(16px,4vw,24px);margin:0;color:#55d9ff}
+canvas{display:block;width:100%;aspect-ratio:4/3;background:#101b30;border:3px solid #4c668c;image-rendering:pixelated}
+#help{text-align:center;font-size:11px;color:#c5cddd;margin:8px 0}
+#controls{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.pad{display:grid;grid-template-columns:42px 42px 42px;grid-template-rows:38px 38px;gap:4px}
+button{border:2px solid #5a769b;background:#243954;color:#fff;border-radius:8px;font-size:19px;font-weight:bold;touch-action:none;user-select:none}
+.pad button{min-width:0}
+.up{grid-column:2;grid-row:1}.left{grid-column:1;grid-row:2}.down{grid-column:2;grid-row:2}.right{grid-column:3;grid-row:2}
+#smoke{height:78px;min-width:100px;padding:8px;background:#6c345d;border-color:#e8a0d8;font-size:14px}
+#start{height:42px;padding:0 15px;font-size:14px;background:#175f76}
+@media(min-width:650px){#controls{justify-content:center;gap:30px}.pad{grid-template-columns:50px 50px 50px;grid-template-rows:42px 42px}}
+</style>
+</head>
+<body>
+<div id="game">
+<header><h1>🚗 방구차 ARCADE</h1><span id="stats">점수 0　♥ 3　STAGE 1</span></header>
+<canvas id="c" width="640" height="480"></canvas>
+<div id="help">방향키 / WASD 이동 · SPACE 연막 · 깃발을 모두 모으세요!</div>
+<div id="controls">
+  <div class="pad">
+    <button class="up" data-dir="up">▲</button>
+    <button class="left" data-dir="left">◀</button>
+    <button class="down" data-dir="down">▼</button>
+    <button class="right" data-dir="right">▶</button>
+  </div>
+  <button id="smoke">💨 연막<br><small id="smokecount">5회</small></button>
+  <button id="start">시작 / 재시작</button>
+</div>
+</div>
+<script>
+(()=>{
+const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
+const stats=document.getElementById('stats'),smokecount=document.getElementById('smokecount');
+const W=640,H=480,cell=32,cols=20,rows=15;
+const map=[
+"####################",
+"#........#.........#",
+"#.####...#..####...#",
+"#....#......#......#",
+"###..#.####.#.###...#",
+"#....#....#.#.......#",
+"#.######..#...####..#",
+"#...........#.......#",
+"#..####.###.#.####..#",
+"#......#...#........#",
+"#.####.#.#####.###..#",
+"#......#........#...#",
+"#.########.####.#...#",
+"#..................#",
+"####################"
+];
+let player,enemies,flags,smokes,score,lives,stage,ammo,running,over,keys={},last=0;
+const center=(x,y)=>({x:x*cell+cell/2,y:y*cell+cell/2});
+function wall(x,y){
+ const cx=Math.floor(x/cell),cy=Math.floor(y/cell);
+ return cx<0||cy<0||cx>=cols||cy>=rows||map[cy][cx]==='#';
+}
+function free(x,y,r=9){
+ return !wall(x-r,y-r)&&!wall(x+r,y-r)&&!wall(x-r,y+r)&&!wall(x+r,y+r);
+}
+function reset(){
+ player={x:48,y:48,dir:'right',cool:0,inv:2};
+ enemies=[{x:590,y:430,dir:'left',stun:0},{x:590,y:48,dir:'down',stun:0}];
+ flags=[];smokes=[];score=0;lives=3;stage=1;ammo=5;over=false;running=true;
+ placeFlags();updateHUD();
+}
+function placeFlags(){
+ flags=[];
+ for(let y=1;y<rows-1;y++)for(let x=1;x<cols-1;x++){
+  if(map[y][x]==='.'&&Math.random()<.115&&Math.hypot(x*cell+16-player.x,y*cell+16-player.y)>75)
+   flags.push({x:x*cell+16,y:y*cell+16});
+ }
+ if(flags.length<12){
+  for(let y=1;y<rows-1&&flags.length<12;y++)for(let x=1;x<cols-1&&flags.length<12;x++)
+   if(map[y][x]==='.'&&!flags.some(f=>f.x===x*cell+16&&f.y===y*cell+16))
+    flags.push({x:x*cell+16,y:y*cell+16});
+ }
+}
+function updateHUD(){
+ stats.textContent=`점수 ${score}　♥ ${lives}　STAGE ${stage}`;
+ smokecount.textContent=ammo+'회';
+}
+function move(obj,dx,dy,speed){
+ let nx=obj.x+dx*speed,ny=obj.y+dy*speed;
+ if(free(nx,obj.y,8))obj.x=nx;
+ if(free(obj.x,ny,8))obj.y=ny;
+}
+function direction(d){
+ if(!player||over)return;
+ player.dir=d;
+ const v={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]}[d];
+ move(player,v[0],v[1],3.2);
+}
+function puff(){
+ if(!running||over||ammo<=0)return;
+ ammo--;const v={up:[0,1],down:[0,-1],left:[1,0],right:[-1,0]}[player.dir];
+ smokes.push({x:player.x+v[0]*25,y:player.y+v[1]*25,r:6,life:2.5});
+ updateHUD();
+}
+function start(){reset();last=performance.now();requestAnimationFrame(loop)}
+document.getElementById('start').addEventListener('click',start);
+document.getElementById('smoke').addEventListener('pointerdown',e=>{e.preventDefault();puff()});
+document.querySelectorAll('[data-dir]').forEach(b=>{
+ b.addEventListener('pointerdown',e=>{e.preventDefault();keys[b.dataset.dir]=true;direction(b.dataset.dir)});
+ b.addEventListener('pointerup',()=>keys[b.dataset.dir]=false);
+ b.addEventListener('pointerleave',()=>keys[b.dataset.dir]=false);
+ b.addEventListener('pointercancel',()=>keys[b.dataset.dir]=false);
+});
+document.addEventListener('keydown',e=>{
+ const m={ArrowUp:'up',w:'up',ArrowDown:'down',s:'down',ArrowLeft:'left',a:'left',ArrowRight:'right',d:'right'};
+ if(m[e.key]){e.preventDefault();keys[m[e.key]]=true}
+ if(e.code==='Space'){e.preventDefault();if(!e.repeat)puff()}
+ if((e.key==='Enter')&&(!running||over))start();
+});
+document.addEventListener('keyup',e=>{
+ const m={ArrowUp:'up',w:'up',ArrowDown:'down',s:'down',ArrowLeft:'left',a:'left',ArrowRight:'right',d:'right'};
+ if(m[e.key])keys[m[e.key]]=false;
+});
+function drawCar(x,y,color,dir){
+ ctx.save();ctx.translate(x,y);
+ if(dir==='up')ctx.rotate(-Math.PI/2);
+ if(dir==='down')ctx.rotate(Math.PI/2);
+ if(dir==='left')ctx.rotate(Math.PI);
+ ctx.fillStyle='#111';ctx.fillRect(-11,-9,22,18);
+ ctx.fillStyle=color;ctx.fillRect(-10,-8,20,16);
+ ctx.fillStyle='#c7f1ff';ctx.fillRect(1,-6,6,12);
+ ctx.fillStyle='#ffe68a';ctx.fillRect(8,-6,3,4);ctx.fillRect(8,2,3,4);
+ ctx.fillStyle='#171923';ctx.fillRect(-7,-11,6,3);ctx.fillRect(4,-11,6,3);ctx.fillRect(-7,8,6,3);ctx.fillRect(4,8,6,3);
+ ctx.restore();
+}
+function draw(){
+ ctx.fillStyle='#14233a';ctx.fillRect(0,0,W,H);
+ for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+  if(map[y][x]==='#'){
+   ctx.fillStyle='#334d70';ctx.fillRect(x*cell,y*cell,cell,cell);
+   ctx.fillStyle='#49678e';ctx.fillRect(x*cell+2,y*cell+2,cell-4,cell-4);
+   ctx.fillStyle='#263d5e';ctx.fillRect(x*cell+4,y*cell+4,cell-8,cell-8);
+  }else{
+   ctx.fillStyle='#172a45';ctx.fillRect(x*cell,y*cell,cell,cell);
+   ctx.fillStyle='#1d3452';ctx.fillRect(x*cell+15,y*cell+15,2,2);
+  }
+ }
+ flags.forEach(f=>{
+  ctx.fillStyle='#ffdc55';ctx.fillRect(f.x-2,f.y-10,3,20);
+  ctx.fillStyle='#ff4e5d';ctx.beginPath();ctx.moveTo(f.x+1,f.y-10);ctx.lineTo(f.x+12,f.y-6);ctx.lineTo(f.x+1,f.y-2);ctx.fill();
+ });
+ smokes.forEach(s=>{
+  ctx.globalAlpha=Math.max(0,s.life/2.5)*.7;ctx.fillStyle='#d9e0ed';
+  ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;
+ });
+ if(player&&(!player.inv||Math.floor(performance.now()/120)%2===0))drawCar(player.x,player.y,'#36c9ff',player.dir);
+ enemies.forEach(e=>drawCar(e.x,e.y,e.stun>0?'#8c8c99':'#ff505c',e.dir));
+ if(!running||over){
+  ctx.fillStyle='rgba(0,0,0,.72)';ctx.fillRect(60,165,520,145);
+  ctx.textAlign='center';ctx.fillStyle='#ffdf62';ctx.font='bold 30px monospace';
+  ctx.fillText(over?'GAME OVER':'방구차 ARCADE',320,215);
+  ctx.fillStyle='#fff';ctx.font='17px monospace';
+  ctx.fillText(over?'시작 / 재시작을 눌러 다시 도전!':'시작 버튼을 눌러 출발하세요!',320,255);
+  ctx.font='13px monospace';ctx.fillText('깃발을 모으고 적 차량을 따돌리세요',320,283);
+ }
+}
+function loop(t){
+ if(!running)return;
+ const dt=Math.min((t-last)/1000,.04);last=t;
+ if(!over){
+  let d=keys.up?'up':keys.down?'down':keys.left?'left':keys.right?'right':null;
+  if(d){
+   player.dir=d;const v={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]}[d];
+   move(player,v[0],v[1],150*dt);
+  }
+  player.inv=Math.max(0,player.inv-dt);
+  enemies.forEach(e=>{
+   if(e.stun>0){e.stun-=dt;return}
+   const dx=player.x-e.x,dy=player.y-e.y;
+   if(Math.random()<.02){
+    if(Math.abs(dx)>Math.abs(dy))e.dir=dx>0?'right':'left';
+    else e.dir=dy>0?'down':'up';
+   }
+   let v={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]}[e.dir];
+   let speed=54+stage*5;
+   const ox=e.x,oy=e.y;move(e,v[0],v[1],speed*dt);
+   if(Math.hypot(e.x-ox,e.y-oy)<.1||!free(e.x+v[0]*10,e.y+v[1]*10,8)){
+    const opts=['up','down','left','right'].sort(()=>Math.random()-.5);
+    for(const nd of opts){
+     const nv={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]}[nd];
+     if(free(e.x+nv[0]*12,e.y+nv[1]*12,8)){e.dir=nd;break}
+    }
+   }
+   if(Math.hypot(player.x-e.x,player.y-e.y)<21&&player.inv<=0){
+    lives--;player.inv=2;
+    player.x=48;player.y=48;
+    updateHUD();
+    if(lives<=0)over=true;
+   }
+  });
+  smokes.forEach(s=>{s.life-=dt;s.r+=dt*12;
+   enemies.forEach(e=>{if(Math.hypot(e.x-s.x,e.y-s.y)<s.r+10)e.stun=Math.max(e.stun,1.4)});
+  });
+  smokes=smokes.filter(s=>s.life>0);
+  flags=flags.filter(f=>{
+   if(Math.hypot(player.x-f.x,player.y-f.y)<17){score+=100;updateHUD();return false}
+   return true;
+  });
+  if(flags.length===0){
+   stage++;ammo=Math.min(5,ammo+2);
+   enemies.forEach(e=>{e.x=590;e.y=430;e.stun=0});
+   placeFlags();updateHUD();
+  }
+  try{
+   const best=Number(localStorage.getItem('bangguBest')||0);
+   if(score>best)localStorage.setItem('bangguBest',score);
+  }catch(e){}
+ }
+ draw();requestAnimationFrame(loop);
+}
+reset();running=false;draw();
+})();
+</script>
+</body>
+</html>
